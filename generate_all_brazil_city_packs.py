@@ -1,12 +1,35 @@
 """
-Pipeline completo para gerar pacotes city_<ibge>.json.gz de todos os municipios do Brasil
-a partir do Foursquare Open Source Places (Apache 2.0) via DuckDB, pronto para upload no Cloudflare R2.
+TempoTodo V2 - Gerador de City Packs (POIs por municipio brasileiro)
+
+Le os lugares (POIs) do Brasil no Overture Maps (dados abertos, release mais
+recente via https://stac.overturemaps.org/catalog.json) e gera um arquivo
+city_<codigo_ibge>.json.gz para cada municipio.
+
+Como funciona:
+  - Filtra os lugares com pais = BR e nome preenchido.
+  - Associa cada lugar ao municipio cuja SEDE e a mais proxima
+    (aproximacao: lugares perto da divisa podem cair na cidade vizinha).
+  - Traduz a categoria do Overture para os tipos do app
+    (WORK, GYM, RESTAURANT, MARKET, HEALTH, EDUCATION, SHOPPING,
+    TRANSPORT, LEISURE, OTHER), cada um com um raio de deteccao em metros.
+
+Formato de cada arquivo:
+  {"version": "AAAA-MM", "ibge": "<codigo>",
+   "pois": [{"id", "n": nome, "la": lat, "lo": lon, "t": tipo, "r": raio}]}
+
+Uso:
+  python generate_all_brazil_city_packs.py --cities ibge_cities_br.csv \
+      --out-dir dist --version 2026-11
 
 Requisitos:
     pip install duckdb
 
 Uso:
     python generate_all_brazil_city_packs.py --cities ibge_cities_br.csv --out-dir dist --version 2026-11
+
+
+Executado mensalmente pelo workflow .github/workflows/generate-r2-city-packs.yml.
+
 """
 
 import argparse
