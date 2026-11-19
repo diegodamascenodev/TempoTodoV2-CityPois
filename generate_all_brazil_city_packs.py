@@ -14,49 +14,55 @@ import csv
 import gzip
 import json
 import math
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
+
 import duckdb
 
 
-def map_fsq_category(cat_labels: str) -> tuple[str, int]:
-    t = (cat_labels or "").lower()
-    if any(k in t for k in ("gym", "fitness", "yoga", "pilates", "crossfit")):
-        return "GYM", 60
-    if any(k in t for k in ("supermarket", "grocery", "market", "convenience")):
-        return "SUPERMARKET", 60
-    if any(k in t for k in ("park", "plaza", "square", "garden", "playground")):
-        return "PARK", 200
-    if any(k in t for k in ("university", "college")):
-        return "UNIVERSITY", 200
-    if any(k in t for k in ("school", "language", "academy")):
-        return "SCHOOL", 80
-    if "bakery" in t:
-        return "BAKERY", 50
-    if any(k in t for k in ("pharmacy", "drugstore")):
-        return "PHARMACY", 50
-    if any(k in t for k in ("cafe", "coffee")):
-        return "CAFE", 50
-    if any(k in t for k in ("restaurant", "diner", "pizzeria", "burger", "food")):
-        return "RESTAURANT", 50
-    if any(k in t for k in ("hospital", "clinic", "medical", "dentist", "doctor")):
-        return "HOSPITAL", 90
-    if any(k in t for k in ("mall", "department store", "shopping", "bookstore")):
-        return "SHOPPING", 180
-    if any(k in t for k in ("bank", "atm")):
-        return "BANK", 50
-    if "pet" in t:
-        return "PET_SHOP", 50
-    if any(k in t for k in ("post office", "government", "service")):
-        return "SERVICES", 60
-    return "OTHER", 60
+def fetch_latest_overture_release() -> str:
+    url = "https://stac.overturemaps.org/catalog.json"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            latest = data.get("latest")
+            if latest:
+                return str(latest)
+    except Exception as exc:
+        print(f"Aviso: falha ao consultar {url} ({exc}); usando fallback 2026-11-18.0")
+    return "2026-11-18.0"
+
+
+def map_overture_category(raw: str | None) -> tuple[str, int]:
+    text = (raw or "").lower()
+    if any(k in text for k in ("office", "coworking", "business", "corporate", "factory", "industrial")):
+        return "WORK", 80
+    if any(k in text for k in ("gym", "fitness", "sports", "crossfit", "pilates", "yoga", "stadium")):
+        return "GYM", 75
+    if any(k in text for k in ("restaurant", "cafe", "coffee", "bakery", "bar", "pub", "pizza", "burger", "food", "bistro")):
+        return "RESTAURANT", 60
+    if any(k in text for k in ("supermarket", "grocery", "market", "convenience", "butcher")):
+        return "MARKET", 75
+    if any(k in text for k in ("hospital", "clinic", "doctor", "dentist", "pharmacy", "medical", "health")):
+        return "HEALTH", 80
+    if any(k in text for k in ("school", "university", "college", "library", "education", "training")):
+        return "EDUCATION", 90
+    if any(k in text for k in ("mall", "shopping", "store", "shop", "retail", "clothing", "electronics")):
+        return "SHOPPING", 85
+    if any(k in text for k in ("station", "airport", "bus", "metro", "subway", "train", "terminal", "parking", "gas_station")):
+        return "TRANSPORT", 85
+    if any(k in text for k in ("park", "cinema", "theater", "museum", "hotel", "beach", "club", "entertainment")):
+        return "LEISURE", 90
+    return "OTHER", 70
 
 
 def load_ibge_cities(csv_path: Path):
     cities = []
-    with csv_path.open("r", encoding="utf-8") as fh:
-        for row in csv.reader(fh):
-            if len(row) < 5:
+    with csv_path.open("r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row or len(row) < 5 or row[0] == "codigo_ibge":
                 continue
             cities.append((row[0].strip(), float(row[3]), float(row[4])))
     return cities
@@ -88,22 +94,26 @@ def main():
     for code, clat, clon in cities:
         cities_by_grid[(int(math.floor(clat)), int(math.floor(clon)))].append((code, clat, clon))
 
-    con = duckdb.connect()
-    con.execute("INSTALL httpfs; LOAD httpfs; SET s3_region='us-east-1';")
+    release = fetch_latest_overture_release()
+    print(f"Usando release Overture Maps: {release}")
 
-    query = """
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs; SET s3_region='us-west-2';")
+
+    parquet_glob = f"s3://overturemaps-us-west-2/release/{release}/theme=places/type=place/*"
+    query = f"""
         SELECT
-            fsq_place_id,
-            name,
-            latitude,
-            longitude,
-            array_to_string(fsq_category_labels, ' ') AS cat_labels
-        FROM read_parquet('s3://fsq-os-places-us-east-1/release/dt=*/places/parquet/*.parquet')
-        WHERE country = 'BR'
-          AND date_closed IS NULL
-          AND name IS NOT NULL
-          AND latitude IS NOT NULL
-          AND longitude IS NOT NULL
+            id,
+            names.primary AS name,
+            ST_Y(geometry) AS latitude,
+            ST_X(geometry) AS longitude,
+            coalesce(categories.primary, '') AS cat_label
+        FROM read_parquet('{parquet_glob}', hive_partitioning=1)
+        WHERE bbox.xmin BETWEEN -74.5 AND -34.0
+          AND bbox.ymin BETWEEN -34.0 AND 5.5
+          AND addresses[1].country = 'BR'
+          AND names.primary IS NOT NULL
+          AND geometry IS NOT NULL
     """
 
     grouped = defaultdict(list)
@@ -112,13 +122,13 @@ def main():
         batch = cursor.fetchmany(50_000)
         if not batch:
             break
-        for fsq_id, name, lat, lon, cat_labels in batch:
+        for place_id, name, lat, lon, cat_label in batch:
             code = nearest_ibge_code(float(lat), float(lon), cities_by_grid)
             if not code:
                 continue
-            cat_type, radius = map_fsq_category(cat_labels)
+            cat_type, radius = map_overture_category(cat_label)
             grouped[code].append({
-                "id": str(fsq_id),
+                "id": str(place_id),
                 "n": str(name).strip(),
                 "la": round(float(lat), 5),
                 "lo": round(float(lon), 5),
