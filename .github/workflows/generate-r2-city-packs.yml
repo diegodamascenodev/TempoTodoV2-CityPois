@@ -1,0 +1,51 @@
+name: Generate & Upload City Packs to R2
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 1 * *" # Todo dia 1o do mes as 04:00 UTC
+
+jobs:
+  build-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install duckdb awscli
+
+      - name: Download IBGE cities table
+        run: |
+          python -c "
+          import csv, io, urllib.request
+          est = {r['codigo_uf']: r['uf'] for r in csv.DictReader(io.StringIO(urllib.request.urlopen('https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/estados.csv').read().decode('utf-8-sig')))}
+          rows = list(csv.DictReader(io.StringIO(urllib.request.urlopen('https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/municipios.csv').read().decode('utf-8-sig'))))
+          with open('ibge_cities_br.csv', 'w', encoding='utf-8', newline='') as f:
+              w = csv.writer(f)
+              for r in rows:
+                  w.writerow([r['codigo_ibge'], r['nome'], est.get(r['codigo_uf'], ''), round(float(r['latitude']), 4), round(float(r['longitude']), 4)])
+          "
+
+      - name: Generate all Brazil city POI packs
+        run: |
+          VERSION=$(date +'%Y-%m')
+          python generate_all_brazil_city_packs.py --cities ibge_cities_br.csv --out-dir dist --version "$VERSION"
+
+      - name: Upload packs to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          aws s3 sync dist/ "s3://${R2_BUCKET_NAME}/" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/json" \
+            --content-encoding "gzip" \
+            --only-show-errors
