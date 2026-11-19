@@ -37,18 +37,18 @@ jobs:
           VERSION=$(date +'%Y-%m')
           python generate_all_brazil_city_packs.py --cities ibge_cities_br.csv --out-dir dist --version "$VERSION"
 
-            - name: Upload packs to Cloudflare R2
-            env:
-              AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-              AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-              AWS_DEFAULT_REGION: auto
-              R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-              R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-            run: |
-              ACCOUNT_ID=$(echo -n "${R2_ACCOUNT_ID}" | tr -d '[:space:]')
-              BUCKET_NAME=$(echo -n "${R2_BUCKET_NAME}" | tr -d '[:space:]')
-              aws s3 sync dist/ "s3://${BUCKET_NAME}/" \
-                --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" \
-                --content-type "application/json" \
-                --content-encoding "gzip" \
-                --only-show-errors
+      - name: Upload packs to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          ACCOUNT_ID=$(echo -n "${R2_ACCOUNT_ID}" | tr -d '[:space:]')
+          BUCKET_NAME=$(echo -n "${R2_BUCKET_NAME}" | tr -d '[:space:]')
+          aws s3 sync dist/ "s3://${BUCKET_NAME}/" \
+            --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/json" \
+            --content-encoding "gzip" \
+            --only-show-errors
