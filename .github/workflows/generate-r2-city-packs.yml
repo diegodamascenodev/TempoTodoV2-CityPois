@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install duckdb awscli
+        run: pip install duckdb
 
       - name: Download IBGE cities table
         run: |
