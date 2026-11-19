@@ -107,7 +107,7 @@ def main():
             names.primary AS name,
             ST_Y(geometry) AS latitude,
             ST_X(geometry) AS longitude,
-            coalesce(categories.primary, '') AS cat_label
+            coalesce(basic_category, taxonomy.primary, '') AS cat_label
         FROM read_parquet('{parquet_glob}', hive_partitioning=1)
         WHERE bbox.xmin BETWEEN -74.5 AND -34.0
           AND bbox.ymin BETWEEN -34.0 AND 5.5
